@@ -15,8 +15,8 @@ import TrackPlayer, {
   type AddTrack,
 } from "react-native-track-player";
 
-import CourseData from "@/src/data/courseData";
 import { getAutoPauseTimestamps } from "@/src/data/autopauseMarkers";
+import CourseData from "@/src/data/courseData";
 import {
   CourseDownloadManager,
   getLocalObjectPath,
@@ -81,6 +81,7 @@ const BASE_UPDATE_OPTIONS: UpdateOptions = {
   progressUpdateEventInterval: 2,
 };
 const AUTO_PAUSE_CROSSING_GRACE_SECONDS = 0.25;
+const AUTO_PAUSE_OFFSET_SECONDS = 0.8;
 const AUTO_PAUSE_SEEK_JUMP_THRESHOLD_SECONDS = 3;
 
 type LessonTrack = AddTrack & {
@@ -419,10 +420,14 @@ export const useLessonAudio = (
     }
 
     const marker = autoPauseTimestamps.find(
-      (timestamp) =>
-        timestamp > previousPosition &&
-        timestamp <= currentPosition + AUTO_PAUSE_CROSSING_GRACE_SECONDS &&
-        !autoPausedMarkersRef.current.has(timestamp)
+      (timestamp) => {
+        const pauseAt = timestamp + AUTO_PAUSE_OFFSET_SECONDS;
+        return (
+          pauseAt > previousPosition &&
+          pauseAt <= currentPosition + AUTO_PAUSE_CROSSING_GRACE_SECONDS &&
+          !autoPausedMarkersRef.current.has(timestamp)
+        );
+      }
     );
 
     if (marker === undefined) {
