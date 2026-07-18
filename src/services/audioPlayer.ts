@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Platform } from "react-native";
 import TrackPlayer, {
   AndroidAudioContentType,
@@ -16,6 +16,7 @@ import TrackPlayer, {
 } from "react-native-track-player";
 
 import CourseData from "@/src/data/courseData";
+import { getAutoPauseTimestamps } from "@/src/data/autopauseMarkers";
 import {
   CourseDownloadManager,
   getLocalObjectPath,
@@ -24,8 +25,10 @@ import {
   getPreferenceWithDefault,
   getProgressForLesson,
   markLessonFinished,
+  PreferenceAutoPause,
   PreferenceStreamQuality,
   updateProgressForLesson,
+  usePreference,
 } from "@/src/storage/persistence";
 import type { CourseName, Quality } from "@/src/types";
 import { log } from "@/src/utils/log";
@@ -77,6 +80,8 @@ const BASE_UPDATE_OPTIONS: UpdateOptions = {
   backwardJumpInterval: 10,
   progressUpdateEventInterval: 2,
 };
+const AUTO_PAUSE_CROSSING_GRACE_SECONDS = 0.25;
+const AUTO_PAUSE_SEEK_JUMP_THRESHOLD_SECONDS = 3;
 
 type LessonTrack = AddTrack & {
   course: CourseName;
@@ -165,9 +170,9 @@ const buildLessonQueue = async (
     throw new Error(`Lesson ${targetLesson} is not available in ${course}`);
   }
 
-  const artwork = CourseData.getCourseImageWithText(
-    course
-  ) as LessonTrack["artwork"];
+  const artwork = __DEV__
+    ? undefined
+    : (CourseData.getCourseImageWithText(course) as LessonTrack["artwork"]);
 
   const tracks = await Promise.all(
     lessons.map(async (lessonNumber, index) => {
@@ -223,13 +228,35 @@ export const useLessonAudio = (
   const [duration, setDuration] = useState(0);
   const [loadError, setLoadError] = useState<AudioError | null>(null);
   const lastPersistTimeRef = useRef(0);
+  const autoPausedMarkersRef = useRef<Set<number>>(new Set());
+  const lastAutoPausePositionRef = useRef(0);
+  const autoPauseInFlightRef = useRef(false);
 
   const playbackState = usePlaybackState();
   const progress = useProgress(500);
   const activeTrack = useActiveTrack() as LessonTrack | undefined;
+  const autoPauseEnabled = usePreference(PreferenceAutoPause) === true;
+  const autoPauseTimestamps = useMemo(
+    () => getAutoPauseTimestamps(course, lesson),
+    [course, lesson]
+  );
   // not sure when isCurrentLessonActive is false -- looks like at the beginning, before RNTP has gotten the memo
   const isCurrentLessonActive = trackMatchesLesson(activeTrack, course, lesson);
   const playbackStatus = playbackState.state;
+
+  const logPlayerEvent = useCallback(
+    (action: string, positionOverride?: number) => {
+      log({
+        action,
+        surface: "listen_screen",
+        course,
+        lesson,
+        position:
+          positionOverride ?? (isCurrentLessonActive ? progress.position : 0),
+      });
+    },
+    [course, lesson, isCurrentLessonActive, progress.position]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -339,6 +366,12 @@ export const useLessonAudio = (
   }, [course, lesson]);
 
   useEffect(() => {
+    autoPausedMarkersRef.current = new Set();
+    lastAutoPausePositionRef.current = 0;
+    autoPauseInFlightRef.current = false;
+  }, [course, lesson]);
+
+  useEffect(() => {
     if (!isCurrentLessonActive) {
       return;
     }
@@ -363,6 +396,58 @@ export const useLessonAudio = (
   ]);
 
   useEffect(() => {
+    if (
+      !autoPauseEnabled ||
+      !isCurrentLessonActive ||
+      playbackStatus !== State.Playing ||
+      autoPauseTimestamps.length === 0 ||
+      autoPauseInFlightRef.current
+    ) {
+      lastAutoPausePositionRef.current = progress.position;
+      return;
+    }
+
+    const previousPosition = lastAutoPausePositionRef.current;
+    const currentPosition = progress.position;
+    lastAutoPausePositionRef.current = currentPosition;
+
+    const jumped =
+      currentPosition < previousPosition ||
+      currentPosition - previousPosition > AUTO_PAUSE_SEEK_JUMP_THRESHOLD_SECONDS;
+    if (jumped) {
+      return;
+    }
+
+    const marker = autoPauseTimestamps.find(
+      (timestamp) =>
+        timestamp > previousPosition &&
+        timestamp <= currentPosition + AUTO_PAUSE_CROSSING_GRACE_SECONDS &&
+        !autoPausedMarkersRef.current.has(timestamp)
+    );
+
+    if (marker === undefined) {
+      return;
+    }
+
+    autoPausedMarkersRef.current.add(marker);
+    autoPauseInFlightRef.current = true;
+    TrackPlayer.pause()
+      .then(() => {
+        logPlayerEvent("auto_pause", marker);
+      })
+      .finally(() => {
+        autoPauseInFlightRef.current = false;
+      });
+  }, [
+    autoPauseEnabled,
+    autoPauseTimestamps,
+    isCurrentLessonActive,
+    logPlayerEvent,
+    playbackStatus,
+    progress.position,
+  ]);
+
+  useEffect(() => {
     if (!isCurrentLessonActive) {
       return;
     }
@@ -381,20 +466,6 @@ export const useLessonAudio = (
     playbackStatus,
     progress.duration,
   ]);
-
-  const logPlayerEvent = useCallback(
-    (action: string, positionOverride?: number) => {
-      log({
-        action,
-        surface: "listen_screen",
-        course,
-        lesson,
-        position:
-          positionOverride ?? (isCurrentLessonActive ? progress.position : 0),
-      });
-    },
-    [course, lesson, isCurrentLessonActive, progress.position]
-  );
 
   const play = useCallback(async () => {
     if (!playerReady || !isCurrentLessonActive) {
@@ -430,6 +501,12 @@ export const useLessonAudio = (
         return;
       }
       await TrackPlayer.seekTo(seconds);
+      autoPausedMarkersRef.current.forEach((marker) => {
+        if (marker >= seconds) {
+          autoPausedMarkersRef.current.delete(marker);
+        }
+      });
+      lastAutoPausePositionRef.current = seconds;
       lastPersistTimeRef.current = Date.now();
       await updateProgressForLesson(course, lesson, seconds);
       if (options?.log !== false) {

@@ -13,6 +13,7 @@ import {
   deleteMetricsToken,
   PreferenceAllowDataCollection,
   PreferenceAutoDelete,
+  PreferenceAutoPause,
   PreferenceDownloadOnlyOnWifi,
   PreferenceDownloadQuality,
   PreferenceStreamQuality,
@@ -26,6 +27,7 @@ type SettingsState = {
   downloadQuality: "high" | "low";
   downloadOnlyOnWifi: boolean;
   allowDataCollection: boolean;
+  autoPause: boolean;
 };
 
 type NullableSettingsState = {
@@ -42,12 +44,14 @@ const SettingsScreen = () => {
     downloadQuality,
     downloadOnlyOnWifi,
     allowDataCollection,
+    autoPause,
   ] = [
     usePreference(PreferenceAutoDelete),
     usePreference(PreferenceStreamQuality),
     usePreference(PreferenceDownloadQuality),
     usePreference(PreferenceDownloadOnlyOnWifi),
     usePreference(PreferenceAllowDataCollection),
+    usePreference(PreferenceAutoPause),
   ];
 
   const settings: NullableSettingsState = {
@@ -56,6 +60,7 @@ const SettingsScreen = () => {
     downloadQuality,
     downloadOnlyOnWifi,
     allowDataCollection,
+    autoPause,
   };
 
   // TODO - this flickers the screen while reloading. consider SWR
@@ -131,7 +136,18 @@ const SettingsScreen = () => {
           await setPreference(PreferenceDownloadQuality, newValue);
         }}
             />
-            <SettingRow
+      <SettingRow
+        title="Auto-pause for questions"
+        description={
+          "Automatically pause during detected quiet moments in the lessons " +
+          "lessons, so you can think before hearing the answer."
+        }
+        accessory={<Checkbox checked={settings.autoPause} />}
+        onPress={async () => {
+          await setPreference(PreferenceAutoPause, !settings.autoPause);
+        }}
+      />
+      <SettingRow
         title="Allow data collection"
         description={
           "Language Transfer records anonymous information about how people " +

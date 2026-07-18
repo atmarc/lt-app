@@ -219,6 +219,7 @@ export const setPreference = async <T>(
 //   | "download-quality"
 //   | "download-only-on-wifi"
 //   | "allow-data-collection"
+//   | "auto-pause"
 //   | "is-first-load"
 //   | "rating-button-dismissed"
 //   | "killswitch-course-version-v1";
@@ -263,6 +264,12 @@ export const PreferenceAllowDataCollection: Preference<boolean> = {
   name: "allow-data-collection",
   schema: z.boolean(),
   defaultValue: true,
+};
+
+export const PreferenceAutoPause: Preference<boolean> = {
+  name: "auto-pause",
+  schema: z.boolean(),
+  defaultValue: false,
 };
 
 export const PreferenceIsFirstLoad: Preference<boolean> = {
